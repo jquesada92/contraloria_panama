@@ -13,7 +13,7 @@ This project automates the ingestion, transformation, and exploration of payroll
 ```
 ├── ingestion.py              # Automation script to ingest and store new government payroll reports
 ├── Contraloria.ipynb         # Notebook for exploratory analysis and enrichment
-├── /new                      # Folder where newly ingested Parquet files are saved
+├── /staging                     # Folder where newly ingested Parquet files are saved
 ├── last_updated_date.txt     # Stores last successful update timestamp
 ```
 
@@ -38,7 +38,7 @@ This script performs the following steps:
   Cleans up rows and columns, renames fields, infers schema, and casts data types. Converts columns like `fecha_actualizacion`, `fecha_consulta`, and `fecha_de_inicio` to datetime.
 
 - **Exports as Parquet**  
-  Saves cleaned data to `/new/` folder in Parquet format using timestamped filenames for traceability.
+  Saves cleaned data to `/staging/` folder in Parquet format using timestamped filenames for traceability.
 
 - **Error Handling**  
   Collects any failed downloads and retries them.
