@@ -17,7 +17,7 @@ import os
 
 print('Ingestion Process')
 
-SOURCE_PATH =  'G:\My Drive\Colab Notebooks\contraloria'
+SOURCE_PATH =  'G:\My Drive\Colab Notebooks\contraloria_panama'
 
 def validate_last_update_date(func):
     print('Checking for updates')
@@ -102,7 +102,7 @@ def execute_ingestion():
             df['fecha_de_inicio'] = to_datetime(df['fecha_de_inicio'],format="%d/%m/%Y").dt.date
             df['fecha_actualizacion'] = to_datetime(df['fecha_actualizacion'])
             df['fecha_consulta'] = to_datetime(df['fecha_consulta'])
-            df.to_parquet(f'''{SOURCE_PATH}/new/{file_name}+{str(fecha_consulta.timestamp()).replace('.','_')}.parquet''',
+            df.to_parquet(f'''{SOURCE_PATH}/staging{file_name}+{str(fecha_consulta.timestamp()).replace('.','_')}.parquet''',
                           index=False,
                           use_deprecated_int96_timestamps=True)
         except Exception as e:
