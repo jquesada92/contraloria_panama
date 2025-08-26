@@ -3,7 +3,7 @@ warnings.filterwarnings("ignore")
 
 
 
-from pandas import read_excel, options, to_datetime,concat
+from pandas import read_excel, options, to_datetime,concat, DataFrame,read_csv
 options.mode.chained_assignment = None
 
 from datetime import datetime as dt
@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from os  import makedirs, chdir, path
 from re import search
 import io
-import os
+from glob import glob
 
 print('Ingestion Process')
 
@@ -58,7 +58,7 @@ def execute_ingestion():
     print('starting update')
     errors = []
     def list_of_institutions():
-        return list(filter(lambda x: x not in ('',"-- Seleccione una institución --"),
+        list_inst = list(filter(lambda x: x not in ('',"-- Seleccione una institución --"),
             BeautifulSoup(
                             post('https://www.contraloria.gob.pa/CGR.PLANILLAGOB.UI/Formas/Index',verify=False).content, 'html.parser'
             )
@@ -66,12 +66,22 @@ def execute_ingestion():
                     .text
                     .split('\n')
                ))
+        
+        file_instituciones = 'lista_instituciones.csv'
+        file_exists = len(glob(f'./{file_instituciones}')) != 0
+        data =  DataFrame( {'institucion':list_inst})
+        if file_exists:
+            sink_df = read_csv(file_instituciones)
+            data = concat([data,sink_df]).drop_duplicates()
+        data.to_csv(file_instituciones,index=False)
 
-    def get_source_data(INSTITUCION:str):
+        return list_inst
+
+    def get_source_data(INSTITUCION:str,ESTADO:str):
 
         try:
             fecha_consulta = dt.now()
-            url = f'https://www.contraloria.gob.pa/CGR.PLANILLAGOB.UI/Formas/Reporte?&Ne={quote(INSTITUCION)}&N=&A=&C=&E='
+            url = f'https://www.contraloria.gob.pa/CGR.PLANILLAGOB.UI/Formas/Reporte?&Ne={quote(INSTITUCION)}&N=&A=&C=&E={quote(ESTADO)}'
             file = get(url,verify=False)
             bytes_file_obj = io.BytesIO()
             bytes_file_obj.write(file.content)
@@ -102,15 +112,27 @@ def execute_ingestion():
             df['fecha_de_inicio'] = to_datetime(df['fecha_de_inicio'],format="%d/%m/%Y").dt.date
             df['fecha_actualizacion'] = to_datetime(df['fecha_actualizacion'])
             df['fecha_consulta'] = to_datetime(df['fecha_consulta'])
-            df.to_parquet(f'''{SOURCE_PATH}/staging{file_name}+{str(fecha_consulta.timestamp()).replace('.','_')}.parquet''',
+            df.to_parquet(f'''{SOURCE_PATH}/staging/{file_name}_{ESTADO}_{str(fecha_consulta.timestamp()).replace('.','_')}.parquet''',
                           index=False,
                           use_deprecated_int96_timestamps=True)
         except Exception as e:
+            errors.append(INSTITUCION)
             print(INSTITUCION,url,e)
 
-    def _run(lst_of_institutions:list):
+    def _run(__lst_of_institutions:list)->None:
         
-        list(map(get_source_data,lst_of_institutions))
+        for _institucion in __lst_of_institutions:
+
+            for _estado in [
+                            "EVENTUAL",
+                            "INTERINO ABIERTO",
+                            "INTERINO HASTA FIN DE AÑO",
+                            "PERIODO PROB. 2 AÑOS",
+                            "PERIODO PROB. DE 1 AÑO",
+                            "PERMANENTE",
+                            "POR ASIGNAR"
+                        ]:
+                get_source_data(_institucion,_estado)
 
     _run(list_of_institutions())
 
