@@ -1,0 +1,23 @@
+# Landing folder - raw data files
+landing/*.parquet
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Databricks
+.databricks/
+_schema/
+
+# Checkpoints
+checkpoints/
+*.checkpoint
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+Thumbs.db
