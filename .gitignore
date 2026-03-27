@@ -1,5 +1,5 @@
 # Landing folder - raw data files
-landing/
+landing/*.parquet
 
 # Python cache
 __pycache__/
