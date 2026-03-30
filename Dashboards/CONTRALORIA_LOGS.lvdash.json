@@ -32,16 +32,16 @@
                   "datasetName": "86d059df",
                   "fields": [
                     {
+                      "name": "secondly(start_at)",
+                      "expression": "DATE_TRUNC(\"SECOND\", `start_at`)"
+                    },
+                    {
                       "name": "report",
                       "expression": "`report`"
                     },
                     {
                       "name": "run_status",
                       "expression": "`run_status`"
-                    },
-                    {
-                      "name": "checked_at",
-                      "expression": "`checked_at`"
                     },
                     {
                       "name": "avg(time)",
@@ -69,6 +69,9 @@
               "widgetType": "table",
               "encodings": {
                 "columns": [
+                  {
+                    "fieldName": "secondly(start_at)"
+                  },
                   {
                     "fieldName": "report"
                   },
@@ -107,9 +110,6 @@
                         }
                       ]
                     }
-                  },
-                  {
-                    "fieldName": "checked_at"
                   },
                   {
                     "fieldName": "avg(time)",
