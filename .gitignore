@@ -1,5 +1,6 @@
-# Landing folder - raw data files
-landing/*.parquet
+# Landing folder - raw data files (ignore entire folder)
+landing/
+staging/
 
 # Python cache
 __pycache__/

@@ -1,0 +1,369 @@
+{
+  "datasets": [
+    {
+      "name": "86d059df",
+      "displayName": "Latest Status Logs by Institution and Status",
+      "queryLines": [
+        "select * from v_api_check_log_last_run"
+      ],
+      "catalog": "contraloria",
+      "schema": "reference_and_audit"
+    },
+    {
+      "name": "a1ab10d2",
+      "displayName": "api_check_log",
+      "queryLines": [
+        "SELECT *, concat(institution_name_spanish,' - ',status_name_spanish) as report FROM contraloria.reference_and_audit.api_check_log"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "9a27f45a",
+      "displayName": "Untitled page",
+      "layout": [
+        {
+          "widget": {
+            "name": "fb89e646",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "86d059df",
+                  "fields": [
+                    {
+                      "name": "report",
+                      "expression": "`report`"
+                    },
+                    {
+                      "name": "run_status",
+                      "expression": "`run_status`"
+                    },
+                    {
+                      "name": "checked_at",
+                      "expression": "`checked_at`"
+                    },
+                    {
+                      "name": "avg(time)",
+                      "expression": "AVG(`time`)"
+                    },
+                    {
+                      "name": "daily(source_update)",
+                      "expression": "DATE_TRUNC(\"DAY\", `source_update`)"
+                    },
+                    {
+                      "name": "sum(OK)",
+                      "expression": "SUM(`OK`)"
+                    },
+                    {
+                      "name": "sum(ERROR)",
+                      "expression": "SUM(`ERROR`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "report"
+                  },
+                  {
+                    "fieldName": "run_status",
+                    "style": {
+                      "type": "basic",
+                      "rules": [
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "1"
+                            },
+                            "operator": "=",
+                            "fieldName": "sum(OK)"
+                          },
+                          "backgroundColor": {
+                            "themeColorType": "visualizationColors",
+                            "position": 7
+                          }
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "1"
+                            },
+                            "operator": "=",
+                            "fieldName": "sum(ERROR)"
+                          },
+                          "backgroundColor": {
+                            "themeColorType": "visualizationColors",
+                            "position": 4
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "fieldName": "checked_at"
+                  },
+                  {
+                    "fieldName": "avg(time)",
+                    "displayName": "run_time(sec)"
+                  },
+                  {
+                    "fieldName": "daily(source_update)"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 12,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "fda17703",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "a1ab10d2",
+                  "fields": [
+                    {
+                      "name": "daily(start_at)",
+                      "expression": "DATE_TRUNC(\"DAY\", `start_at`)"
+                    },
+                    {
+                      "name": "avg(time)",
+                      "expression": "AVG(`time`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "forecast-line",
+              "encodings": {
+                "x": {
+                  "fieldName": "daily(start_at)",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "original": {
+                    "fieldName": "avg(time)"
+                  },
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "696014c5",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "86d059df",
+                  "fields": [
+                    {
+                      "name": "max(source_update)",
+                      "expression": "MAX(`source_update`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Source Update Date"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max(source_update)"
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "ae3ade35",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "86d059df",
+                  "fields": [
+                    {
+                      "name": "max(checked_at)",
+                      "expression": "MAX(`checked_at`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Last Run"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max(checked_at)"
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "d51589da",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "86d059df",
+                  "fields": [
+                    {
+                      "name": "countdistinct(report)",
+                      "expression": "COUNT(DISTINCT `report`)"
+                    },
+                    {
+                      "name": "sum(OK)",
+                      "expression": "SUM(`OK`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Files downloaded"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(OK)"
+                },
+                "target": {
+                  "fieldName": "countdistinct(report)",
+                  "change": {
+                    "type": "percent"
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 0,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "d23eb43a",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "86d059df",
+                  "fields": [
+                    {
+                      "name": "countdistinct(report)",
+                      "expression": "COUNT(DISTINCT `report`)"
+                    },
+                    {
+                      "name": "sum(ERROR)",
+                      "expression": "SUM(`ERROR`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Errors"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(ERROR)"
+                },
+                "target": {
+                  "fieldName": "countdistinct(report)",
+                  "change": {
+                    "type": "percent"
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 10,
+            "y": 0,
+            "width": 2,
+            "height": 3
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}
