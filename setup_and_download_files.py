@@ -13,24 +13,7 @@ CREATE CATALOG IF NOT EXISTS {CATALOG};
 CREATE SCHEMA IF NOT EXISTS {SCHEMA_REFERENCE_AUDIT};
 CREATE SCHEMA IF NOT EXISTS {SCHEMA_PAYROLL};
 
-CREATE TABLE IF NOT EXISTS {TABLE_REFERENCE_STATUS} (
-    status_name_spanish STRING NOT NULL,
-    status_name_english STRING NOT NULL,
-    created_at TIMESTAMP DEFAULT current_timestamp(),
-    last_seen_at TIMESTAMP NOT NULL
-)
-USING DELTA
-TBLPROPERTIES('delta.feature.allowColumnDefaults' = 'supported');
 
-
-CREATE TABLE IF NOT EXISTS {TABLE_REFERENCE_INSTITUCIONS} (
-    institution_name_spanish  STRING NOT NULL,
-    institution_name_english  STRING NOT NULL,
-    created_at TIMESTAMP DEFAULT current_timestamp(),
-    last_seen_at TIMESTAMP NOT NULL
-)
-USING DELTA
-TBLPROPERTIES('delta.feature.allowColumnDefaults' = 'supported');
 
 CREATE TABLE IF NOT EXISTS {TABLE_AUDIT_API_CHECK} (
     institution_name_spanish STRING NOT NULL,

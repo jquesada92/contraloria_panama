@@ -99,12 +99,14 @@ def silver_contraloria_employees_current():
     Deduplication keys: cedula, institucion, nombre, apellido
     Orders by fecha_consulta descending to keep the latest record.
     Translates all column names from Spanish to English.
+    Joins with reference tables to get English translations for institutions and statuses.
     """
     # Define window specification to rank records by fecha_consulta within each group
     window_spec = Window.partitionBy(DEDUP_KEYS).orderBy(F.col(UPDATE_COL).desc())
     
-    return (
-        dp.read("bronze_contraloria_employees_scd_type2")
+    # Get deduplicated employee records
+    employees = (
+        spark.read.table("bronze_contraloria_employees_scd_type2")
         # Filter for current records only (SCD Type 2)
         .where("__END_AT IS NULL")
         # Add row number to identify the most recent record per group
@@ -113,16 +115,28 @@ def silver_contraloria_employees_current():
         .where("row_num = 1")
         # Drop the auxiliary column
         .drop("row_num")
+    )
+    
+    # Read reference tables
+    institutions = spark.read.table("contraloria.reference_and_audit.reference_institution_names")
+    statuses = spark.read.table("contraloria.reference_and_audit.reference_status_names")
+    
+    # Join with reference tables to get English translations
+    return (
+        employees
+        .join(institutions, employees.institucion == institutions.institution_name_spanish, "left")
+        .join(statuses, employees.estado == statuses.status_name_spanish, "left")
         # Select relevant columns and translate to English
         .select(
             F.col('cedula').alias('id_number'),
-            F.col('institucion').alias('institution'),
+            F.coalesce(F.col('institution_name_english'), F.col('institucion')).alias('institution_english'),
             F.col('nombre').alias('first_name'),
             F.col('apellido').alias('last_name'),
             F.col('cargo').alias('position'),
             F.col('salario').alias('salary'),
             F.col('gasto').alias('allowance'),
-            F.col('estado').alias('status'),
+            F.col('estado').alias('status_spanish'),
+            F.coalesce(F.col('status_name_english'), F.col('estado')).alias('status_english'),
             F.col('fecha_de_inicio').alias('start_date'),
             F.col('fecha_actualizacion').alias('update_date'),
             F.col('fecha_consulta').alias('query_date'),
