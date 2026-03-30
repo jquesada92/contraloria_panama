@@ -40,10 +40,6 @@
                       "expression": "`run_status`"
                     },
                     {
-                      "name": "source_update",
-                      "expression": "`source_update`"
-                    },
-                    {
                       "name": "checked_at",
                       "expression": "`checked_at`"
                     },
@@ -52,8 +48,16 @@
                       "expression": "AVG(`time`)"
                     },
                     {
-                      "name": "sum(score)",
-                      "expression": "SUM(`score`)"
+                      "name": "daily(source_update)",
+                      "expression": "DATE_TRUNC(\"DAY\", `source_update`)"
+                    },
+                    {
+                      "name": "sum(OK)",
+                      "expression": "SUM(`OK`)"
+                    },
+                    {
+                      "name": "sum(ERROR)",
+                      "expression": "SUM(`ERROR`)"
                     }
                   ],
                   "disaggregated": false
@@ -77,14 +81,14 @@
                           "condition": {
                             "operand": {
                               "type": "data-value",
-                              "value": "-1"
+                              "value": "1"
                             },
                             "operator": "=",
-                            "fieldName": "sum(score)"
+                            "fieldName": "sum(OK)"
                           },
                           "backgroundColor": {
                             "themeColorType": "visualizationColors",
-                            "position": 6
+                            "position": 7
                           }
                         },
                         {
@@ -94,21 +98,25 @@
                               "value": "1"
                             },
                             "operator": "=",
-                            "fieldName": "sum(score)"
+                            "fieldName": "sum(ERROR)"
                           },
-                          "backgroundColor": "#00A972"
+                          "backgroundColor": {
+                            "themeColorType": "visualizationColors",
+                            "position": 4
+                          }
                         }
                       ]
                     }
                   },
                   {
-                    "fieldName": "source_update"
-                  },
-                  {
                     "fieldName": "checked_at"
                   },
                   {
-                    "fieldName": "avg(time)"
+                    "fieldName": "avg(time)",
+                    "displayName": "run_time(sec)"
+                  },
+                  {
+                    "fieldName": "daily(source_update)"
                   }
                 ]
               }
@@ -116,9 +124,9 @@
           },
           "position": {
             "x": 0,
-            "y": 6,
+            "y": 9,
             "width": 12,
-            "height": 10
+            "height": 8
           }
         },
         {
@@ -166,9 +174,185 @@
           },
           "position": {
             "x": 0,
-            "y": 0,
+            "y": 3,
             "width": 12,
             "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "696014c5",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "86d059df",
+                  "fields": [
+                    {
+                      "name": "max(source_update)",
+                      "expression": "MAX(`source_update`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Source Update Date"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max(source_update)"
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "ae3ade35",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "86d059df",
+                  "fields": [
+                    {
+                      "name": "max(checked_at)",
+                      "expression": "MAX(`checked_at`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Last Run"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max(checked_at)"
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "d51589da",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "86d059df",
+                  "fields": [
+                    {
+                      "name": "countdistinct(report)",
+                      "expression": "COUNT(DISTINCT `report`)"
+                    },
+                    {
+                      "name": "sum(OK)",
+                      "expression": "SUM(`OK`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Files downloaded"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(OK)"
+                },
+                "target": {
+                  "fieldName": "countdistinct(report)",
+                  "change": {
+                    "type": "percent"
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 0,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "d23eb43a",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "86d059df",
+                  "fields": [
+                    {
+                      "name": "countdistinct(report)",
+                      "expression": "COUNT(DISTINCT `report`)"
+                    },
+                    {
+                      "name": "sum(ERROR)",
+                      "expression": "SUM(`ERROR`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Errors"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(ERROR)"
+                },
+                "target": {
+                  "fieldName": "countdistinct(report)",
+                  "change": {
+                    "type": "percent"
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 10,
+            "y": 0,
+            "width": 2,
+            "height": 3
           }
         }
       ],
