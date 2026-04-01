@@ -1,6 +1,7 @@
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
+
 # Target streaming table for latest API check logs
 dp.create_streaming_table(name="contraloria.reference_and_audit.api_check_log_latest")
 
@@ -14,11 +15,11 @@ dp.create_auto_cdc_flow(
 )
 
 # Reference table with unique institution names, English translations, and last update info
-@dp.materialized_view(name="contraloria.reference_and_audit.reference_institution_names")
+@dp.table(name="contraloria.reference_and_audit.reference_institution_names")
 def reference_institution_names():
     # Get unique institution names with last source_update and checked_at
     institution_stats = (
-        spark.read.table("contraloria.reference_and_audit.api_check_log")
+        spark.readStream.table("contraloria.reference_and_audit.api_check_log")
          .where('run_status = "OK"')
         .groupBy("institution_name_spanish")
         .agg(
@@ -34,11 +35,11 @@ def reference_institution_names():
     )
 
 # Reference table with unique status names, English translations, and last update info
-@dp.materialized_view(name="contraloria.reference_and_audit.reference_status_names")
+@dp.table(name="contraloria.reference_and_audit.reference_status_names")
 def reference_status_names():
     # Get unique status names with last source_update and checked_at
     status_stats = (
-        spark.read.table("contraloria.reference_and_audit.api_check_log")
+        spark.readStream.table("contraloria.reference_and_audit.api_check_log")
          .where('run_status = "OK"')
         .groupBy("status_name_spanish")
         .agg(
@@ -53,35 +54,27 @@ def reference_status_names():
         F.expr("ai_translate(status_name_spanish, 'en')")
     )
 
-# Streaming table to store unique positions (cargos) with append-only pattern
-dp.create_streaming_table(name="contraloria.reference_and_audit.reference_positions")
+# Reference table with unique position names and English translations
+@dp.table(name="contraloria.reference_and_audit.reference_position_names")
+def reference_position_names():
+    """
+    Extracts unique position names from staging files and translates them once.
+    This dramatically improves performance by avoiding ai_translate() on every record.
+    """
 
-# Temporary view to get distinct positions from the source with translations
-@dp.temporary_view()
-def unique_positions_stream():
-    """
-    Extracts distinct position names (cargo) from the bronze employees table
-    and adds English translations.
-    """
-    return (
-        spark.readStream.table("contraloria.employee_payroll.bronze_contraloria_raw")
+    
+    # Read streaming data from parquet files
+    positions = (
+        spark.readStream
+        .table('contraloria.employee_payroll.bronze_contraloria_employees_raw')
         .select("cargo")
-        .where("cargo IS NOT NULL")
-        .dropDuplicates(["cargo"])
-        .withColumn("position_spanish", F.col("cargo"))
-        .withColumn("position_english", F.expr("ai_translate(cargo, 'en')"))
-        .withColumn("first_seen", F.current_timestamp())
-        .select("position_spanish", "position_english", "first_seen")
+        .filter(F.col("cargo").isNotNull())
+        .distinct()
     )
+    
+    # Add English translation using Databricks AI translate function (once per unique position)
+    return positions.withColumn(
+        "position_name_english",
+        F.expr("ai_translate(cargo, 'en')")
+    ).withColumnRenamed("cargo", "position_name_spanish")
 
-# Append flow to insert only new positions into the reference table
-@dp.append_flow(
-    target="contraloria.reference_and_audit.reference_positions",
-    name="new_positions_flow"
-)
-def append_new_positions():
-    """
-    Appends only new position values to the reference table.
-    The streaming table handles deduplication automatically.
-    """
-    return spark.readStream.table("unique_positions_stream")

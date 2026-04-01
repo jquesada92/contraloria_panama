@@ -81,3 +81,5 @@ for institution, status in product(institution_lst, status_lst):
 
 
 dbutils.jobs.taskValues.set(key="updates", value=updates)
+
+
