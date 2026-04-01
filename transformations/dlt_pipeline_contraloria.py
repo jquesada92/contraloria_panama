@@ -1,21 +1,7 @@
 from pyspark import pipelines as dp
 import pyspark.sql.functions as F
-from pyspark.sql.types import (
-    StructType,
-    StructField,
-    StringType,
-    DoubleType,
-    DateType,
-    TimestampType,
-)
 from pyspark.sql.window import Window
 from config import STAGING_PATH, STAGING_SCHEMA
-
-# ==============================================================================
-# CONFIGURATION
-# ==============================================================================
-
-SNAPSHOT_DATE = spark.conf.get("SNAPSHOT_DATE").strip().lower()
 
 
 # ==============================================================================
@@ -83,7 +69,6 @@ def employee_payroll_latest_snapshot():
     # Read current employee data (streaming)
     last_snapshot = (
         spark.read.table("contraloria.reference_and_audit.api_check_log_latest")
-        .where('run_status = "OK"')
         .select(F.max("source_update").alias("last_source_update"))
     )
 

@@ -1,6 +1,13 @@
 # Path to the staging folder where Parquet files are written
 # Adjust this to your actual staging path
-from pyspark.sql.types import *
+from pyspark.sql.types import (
+    StructType,
+    StructField,
+    StringType,
+    DoubleType,
+    DateType,
+    TimestampType,
+)
 
 ROOT_PATH = '/Workspace/Users/jaquesada92@outlook.com/contraloria_panama'
 STAGING_PATH = f'{ROOT_PATH}/staging/'
