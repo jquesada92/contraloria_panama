@@ -1,7 +1,7 @@
 from pyspark import pipelines as dp
 import pyspark.sql.functions as F
 from pyspark.sql.window import Window
-from config import STAGING_PATH, STAGING_SCHEMA
+from config import STAGING_PATH, STAGING_SCHEMA, ROOT_PATH 
 
 
 # ==============================================================================
@@ -29,7 +29,7 @@ def bronze_contraloria_employees_raw():
     return (
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "parquet")
-        .option("cloudFiles.schemaLocation", f"{STAGING_PATH}/_schemas")
+        .option("cloudFiles.schemaLocation", f"{ROOT_PATH}/_schemas")
         .schema(STAGING_SCHEMA)
         .load(STAGING_PATH)
          .withColumn(
@@ -80,7 +80,7 @@ dp.create_auto_cdc_flow(
 
 
 @dp.materialized_view(
-    name="employee_payroll_latest_snapshot",
+    name="silver_employee_payroll_latest_snapshot",
     comment="Latest employee snapshot with English translations from reference tables. Optimized with broadcast joins.",
     # ✅ LIQUID CLUSTERING para queries analíticas
     cluster_by=["institution_sp", "status_sp"],
@@ -102,18 +102,7 @@ def employee_payroll_latest_snapshot():
     """
 
     # Read validated employee data
-    employees_df = spark.read.table("bronze_contraloria_employees_raw")
-
-    # ✅ OPTIMIZACIÓN: Usar window function en lugar de collect()
-    # Identifica el último snapshot sin traer datos al driver
-    latest_snapshot_window = Window.orderBy(F.col("fecha_consulta").desc())
-    
-    current_employees_df = (
-        employees_df
-        .withColumn("row_num", F.row_number().over(latest_snapshot_window))
-        .where("row_num = 1")  # ✅ Solo el snapshot más reciente
-        .drop("row_num")
-    )
+    employees_df = dp.read("bronze_contraloria_employees_raw")
 
     # Load reference tables for translations (small dimension tables)
     institutions_df = spark.read.table(
@@ -128,20 +117,23 @@ def employee_payroll_latest_snapshot():
 
     # ✅ Broadcast joins for small dimension tables
     return (
-        current_employees_df
+        employees_df
         .join(
             F.broadcast(institutions_df),
-            current_employees_df.institucion == institutions_df.institution_name_spanish,
-            "left",
-        )
+            on =[
+            employees_df.institucion == institutions_df.institution_name_spanish,
+            employees_df.fecha_consulta == institutions_df.last_source_update],
+            how ="inner")
         .join(
             F.broadcast(statuses_df),
-            current_employees_df.estado == statuses_df.status_name_spanish,
-            "left",
+            on = [
+            employees_df.estado == statuses_df.status_name_spanish,
+            employees_df.fecha_consulta == statuses_df.last_source_update],
+            how = "inner",
         )
         .join(
             F.broadcast(positions_df),
-            current_employees_df.cargo == positions_df.position_name_spanish,
+            employees_df.cargo == positions_df.position_name_spanish,
             "left",
         )
         .select(
@@ -212,7 +204,7 @@ def silver_inactive_employees():
 
     # Latest snapshot employees
     latest_snapshot = (
-        spark.read.table("employee_payroll_latest_snapshot")
+        spark.read.table("silver_employee_payroll_latest_snapshot")
         .select(
             F.col("id_number").alias("cedula"),
             F.col("first_name").alias("nombre"),
@@ -245,3 +237,170 @@ def silver_inactive_employees():
             "detected_at",
         )
     )
+
+
+# ==============================================================================
+# GOLD LAYER: DATA QUALITY & AGGREGATED ANALYTICS
+# ==============================================================================
+
+
+@dp.materialized_view(
+    name="gold_employee_aggregated_summary",
+    comment="Per-employee aggregated summary with total salary/allowance, distinct position count, and JSON list of all positions with name variations included.",
+    cluster_by=["id_number"],
+)
+def gold_employee_aggregated_summary():
+    """
+    Creates an aggregated summary per employee (cedula) from the latest snapshot.
+    
+    INCLUDES:
+    - Total salary aggregated across all positions
+    - Total allowance (gasto) aggregated
+    - Count of distinct positions held by the employee
+    - First start date (earliest)
+    - Last start date (most recent)
+    - JSON array with full details per position INCLUDING the name/surname variation used
+    
+    HANDLING NAME VARIATIONS:
+    - Each position in the JSON includes the first_name and last_name as they appear in the source
+    - A cedula may have multiple name spellings (data quality issue from source system)
+    - This allows you to see which name variation was used for each specific position
+    
+    Use cases:
+    - Data quality check: identify employees with multiple positions
+    - Financial analysis: total compensation per person
+    - Career progression: track position changes
+    - Name variation auditing: see which name was used for each position
+    """
+    
+    employees = dp.read("silver_employee_payroll_latest_snapshot")
+    
+    return (
+        employees
+        .groupBy("id_number")
+        .agg(
+
+            F.countDistinct('first_name').alias('name_count'),
+            F.countDistinct('last_name').alias('last_name_count'),
+            # Aggregations: totals and counts
+            F.sum("salary").alias("total_salary"),
+            F.sum("allowance").alias("total_allowance"),
+            F.countDistinct("position_sp").alias("distinct_position_count"),
+            # Date range
+            F.min("start_date").alias("first_start_date"),
+            F.max("start_date").alias("last_start_date"),
+             F.max('years_of_service').alias('total_years_of_service'),
+            # ✅ JSON array with all position details INCLUDING name variations
+            F.to_json(
+                F.collect_list(
+                    F.struct(
+                        F.col("first_name"),  # ✅ Nombre como aparece para este cargo
+                        F.col("last_name"),   # ✅ Apellido como aparece para este cargo
+                        F.col("status_sp").alias("status"),
+                        F.col("institution_sp").alias("institution"),
+                        F.col("position_sp").alias("position"),
+                        F.col("salary"),
+                        F.col("allowance"),
+                        F.col("start_date"),
+                        F.col('years_of_service')
+                    )
+                )
+            ).alias("positions_details_json"),
+        )
+        .select('id_number',
+                F.when((F.col('name_count') + F.col('last_name_count')) >2 , F.lit(1)).otherwise(0).alias('multiple_names'),
+                'total_salary',
+                'total_allowance',
+                (F.col('total_salary') + F.col('total_allowance')).alias('total_compensation'),
+                'distinct_position_count',
+                'first_start_date',
+                'last_start_date',
+                'total_years_of_service',
+                'positions_details_json' )
+    )
+
+
+@dp.materialized_view(
+    name="gold_aggregated_by_institution_status_position",
+    comment="Aggregated summary by institution, status, and position with salary, allowance, and tenure metrics.",
+    cluster_by=["institution_sp", "status_sp"],
+)
+def gold_aggregated_by_institution_status_position():
+    """
+    Creates an aggregated summary grouped by institution, status, and position.
+    
+    INCLUDES:
+    - Total salary for the group
+    - Total allowance (gasto) for the group
+    - Total compensation (salary + allowance)
+    - Employee count in the group
+    - First start date (earliest hire in group)
+    - Last start date (most recent hire in group)
+    - Average years of service
+    - Minimum years of service
+    - Maximum years of service
+    
+    Use cases:
+    - Institution-level payroll analysis
+    - Position benchmarking across institutions
+    - Workforce tenure analysis by role
+    - Budget planning and forecasting
+    - Organizational structure insights
+    """
+    
+    employees = dp.read("silver_employee_payroll_latest_snapshot")
+    
+    return (
+        employees
+        .groupBy(
+            "institution_sp",
+            "institution_en",
+            "status_sp",
+            "status_en",
+            "position_sp",
+            "position_en",
+        )
+        .agg(
+            # Financial metrics
+            F.sum("salary").alias("total_salary"),
+            F.mean('salary').alias('avg_salary'),
+            F.sum("allowance").alias("total_allowance"),
+            F.mean('allowance').alias('avg_allowance'),
+            F.sum(F.col("salary") + F.col("allowance")).alias("total_compensation"),
+            
+            # Headcount
+            F.count("*").alias("employee_count"),
+            F.countDistinct("id_number").alias("unique_employee_count"),
+            
+            # Date range
+            F.min("start_date").alias("first_start_date"),
+            F.max("start_date").alias("last_start_date"),
+            
+            # Tenure metrics (years of service)
+            F.avg("years_of_service").alias("avg_years_of_service"),
+            F.min("years_of_service").alias("min_years_of_service"),
+            F.max("years_of_service").alias("max_years_of_service"),
+        )
+        .select(
+            "institution_sp",
+            "institution_en",
+            "status_sp",
+            "status_en",
+            "position_sp",
+            "position_en",
+            "total_salary",
+            "avg_salary",
+            "total_allowance",
+            'avg_allowance',
+            "total_compensation",
+            "employee_count",
+            "unique_employee_count",
+            "first_start_date",
+            "last_start_date",
+            "avg_years_of_service",
+            "min_years_of_service",
+            "max_years_of_service",
+        )
+    )
+
+
