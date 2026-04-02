@@ -10,7 +10,7 @@ from pyspark.sql.types import (
 )
 
 ROOT_PATH = '/Workspace/Users/jaquesada92@outlook.com/contraloria_panama'
-STAGING_PATH = f'{ROOT_PATH}/staging/'
+STAGING_PATH = f'/Volumes/contraloria/reference_and_audit/contraloria_staging'
 
 # ==============================================================================
 # SCHEMA DEFINITION - Input Schema (Spanish column names from source files)

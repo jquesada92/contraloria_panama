@@ -11,7 +11,7 @@ from config import STAGING_PATH, STAGING_SCHEMA, ROOT_PATH
 
 @dp.table(
     comment="Raw employee data from staging parquet files. Streaming ingestion with Auto Loader. RAW DATA - NO QUALITY FILTERS.",
-    # ✅ LIQUID CLUSTERING - mejor que partitioning
+    # ✅ LIQUID CLUSTERIhttps://dbc-f88938f0-02c4.cloud.databricks.com/editor/files/3086861285192182?contextId=pipeline%3Affbae848-bc88-4c0e-89a3-32768ee1fc79&o=138626662718526$0NG - mejor que partitioning
     cluster_by=["institucion", "fecha_consulta"],  # Auto-optimiza queries por estas columnas
 )
 def bronze_contraloria_employees_raw():

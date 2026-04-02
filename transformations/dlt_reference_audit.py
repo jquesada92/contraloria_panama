@@ -54,27 +54,47 @@ def reference_status_names():
         F.expr("ai_translate(status_name_spanish, 'en')")
     )
 
-# Reference table with unique position names and English translations
+# Reference table for position names with translations (streaming table)
 @dp.table(name="contraloria.reference_and_audit.reference_position_names")
 def reference_position_names():
     """
-    Extracts unique position names from staging files and translates them once.
-    This dramatically improves performance by avoiding ai_translate() on every record.
+    Streaming table with unique position names and English translations.
+    Uses conditional anti-join to avoid reprocessing existing positions.
     """
-
-    
-    # Read streaming data from parquet files
-    positions = (
+    # Read unique positions from bronze (streaming)
+    new_positions = (
         spark.readStream
         .table('contraloria.employee_payroll.bronze_contraloria_employees_raw')
-        .select("cargo")
+        .select(
+            F.col("cargo").alias("position_name_spanish"),
+            F.col("fecha_actualizacion").alias("last_seen_at")
+        )
         .filter(F.col("cargo").isNotNull())
-        .distinct()
+        .dropDuplicates(["position_name_spanish"])
     )
     
-    # Add English translation using Databricks AI translate function (once per unique position)
-    return positions.withColumn(
+    # Conditional anti-join: only filter if target table exists and has data
+    try:
+        # Attempt to read existing positions (batch read from same table)
+        existing = spark.read.table("contraloria.reference_and_audit.reference_position_names")
+        
+        # Check if table has data
+        if existing.count() > 0:
+            # Table exists and has data - filter out existing positions
+            only_new = new_positions.join(
+                existing.select("position_name_spanish"),
+                "position_name_spanish",
+                "left_anti"
+            )
+        else:
+            # Table exists but is empty - process all positions
+            only_new = new_positions
+    except:
+        # Table doesn't exist yet - process all positions (first run)
+        only_new = new_positions
+    
+    # Translate positions
+    return only_new.withColumn(
         "position_name_english",
-        F.expr("ai_translate(cargo, 'en')")
-    ).withColumnRenamed("cargo", "position_name_spanish")
-
+        F.expr("ai_translate(position_name_spanish, 'en')")
+    )
