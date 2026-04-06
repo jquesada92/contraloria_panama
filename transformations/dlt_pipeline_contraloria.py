@@ -32,12 +32,10 @@ def bronze_contraloria_employees_raw():
         .option("cloudFiles.schemaLocation", f"{ROOT_PATH}/_schemas")
         .schema(STAGING_SCHEMA)
         .load(STAGING_PATH)
-         .withColumn(
-            "antiguedad",  # Calculate years of service
-            F.months_between(F.col("fecha_consulta"), F.col("fecha_de_inicio")) / 12,
+        .withColumns({'composite_key': F.concat_ws('-',F.col('nombre'),F.col('apellido'), F.col('institucion'), F.col('cargo'), F.regexp_replace('cedula','-','')),
+                    "antiguedad":F.months_between(F.col("fecha_consulta"), F.col("fecha_de_inicio")) / 12}
         )
     )
-
 
 # ==============================================================================
 # BRONZE LAYER: SCD TYPE 2 - HISTORICAL CHANGE TRACKING
@@ -138,6 +136,7 @@ def employee_payroll_latest_snapshot():
         )
         .select(
             # Translated columns from Spanish to English
+            F.col('composite_key'),
             F.col("nombre").alias("first_name"),
             F.col("apellido").alias("last_name"),
             F.col("cedula").alias("id_number"),
