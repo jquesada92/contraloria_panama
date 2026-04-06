@@ -8,7 +8,7 @@
 
 Pipeline de datos empresarial para la extracción, procesamiento y análisis de información de nómina de empleados públicos de la República de Panamá, obtenida desde la API oficial de la Contraloría General de la República.
 
-Este proyecto implementa una arquitectura de datos moderna utilizando **Spark Declarative Pipelines (Delta Live Tables)** en **Databricks**, siguiendo el patrón **Medallion Architecture** (Bronze → Silver) con capacidades avanzadas de seguimiento histórico mediante **SCD Type 2**.
+Este proyecto implementa una arquitectura de datos moderna utilizando **Spark Declarative Pipelines (Delta Live Tables)** en **Databricks**, siguiendo el patrón **Medallion Architecture** (Bronze → Silver) con capacidades avanzadas de seguimiento histórico mediante **SCD Type 2** y **Liquid Clustering** para optimización de rendimiento.
 
 ---
 
@@ -42,7 +42,7 @@ Este proyecto implementa una arquitectura de datos moderna utilizando **Spark De
                     ┌─────────────────┐
                     │                 │
                     │  Silver Layer   │◀─── Materialized View
-                    │  (Curated Data) │     (Deduplication)
+                    │  (Curated Data) │     (Snapshot Actual)
                     │                 │
                     └─────────────────┘
 ```
@@ -52,23 +52,31 @@ Este proyecto implementa una arquitectura de datos moderna utilizando **Spark De
 ```mermaid
 graph LR
     A[API Contraloría] -->|HTTP Request| B[setup_and_download_files.py]
-    B -->|Save Parquet| C[Staging Folder]
-    C -->|Auto Loader| D[bronze_contraloria_raw]
-    D -->|Auto CDC| E[bronze_contraloria_employees_scd_type2]
-    E -->|Batch Read + Dedup| F[silver_contraloria_employees_current]
+    B -->|Save Parquet| C[Workspace Staging]
+    C -->|Copia Manual| D[Volume Staging]
+    D -->|Auto Loader| E[bronze_contraloria_employees_raw]
+    E -->|Auto CDC| F[bronze_contraloria_employees_scd_type2]
+    F -->|Batch Read + Joins| G[silver_employee_payroll_latest_snapshot]
+    F -->|Anti Join| H[silver_inactive_employees]
     
-    B -->|Audit Log| G[(api_check_log)]
-    B -->|Reference Data| H[(reference_status)]
-    B -->|Reference Data| I[(reference_institutions)]
+    B -->|Audit Log| I[(api_check_log)]
+    I -->|Pipeline DLT| J[api_check_log_latest]
+    J -->|Genera| K[(reference_status_names)]
+    J -->|Genera| L[(reference_institution_names)]
+    E -->|Extrae Cargos| M[(reference_position_names)]
     
     style A fill:#ff6b6b
     style C fill:#ffd93d
-    style D fill:#6bcf7f
+    style D fill:#ffd93d
     style E fill:#6bcf7f
-    style F fill:#4d96ff
-    style G fill:#c5c5c5
-    style H fill:#c5c5c5
+    style F fill:#6bcf7f
+    style G fill:#4d96ff
+    style H fill:#4d96ff
     style I fill:#c5c5c5
+    style J fill:#c5c5c5
+    style K fill:#c5c5c5
+    style L fill:#c5c5c5
+    style M fill:#c5c5c5
 ```
 
 ---
@@ -77,24 +85,32 @@ graph LR
 
 ### 🥉 Bronze Layer (Datos Crudos)
 
-#### `bronze_contraloria_raw`
+#### `bronze_contraloria_employees_raw`
 * **Tipo**: Streaming Table
-* **Fuente**: Auto Loader (cloudFiles)
+* **Fuente**: Auto Loader (cloudFiles) desde Unity Catalog Volume
 * **Propósito**: Ingesta incremental de archivos Parquet
 * **Características**:
   * Procesamiento automático de nuevos archivos
   * Esquema explícito predefinido
   * Sin transformaciones (datos tal cual desde la fuente)
+  * **Liquid Clustering** por: `institucion`, `fecha_consulta`
+  * Columnas calculadas: `composite_key`, `antiguedad` (años de servicio)
 
 #### `bronze_contraloria_employees_scd_type2`
 * **Tipo**: Streaming Table con SCD Type 2
-* **Fuente**: `bronze_contraloria_raw` via Auto CDC
+* **Fuente**: `bronze_contraloria_employees_raw` via Auto CDC
 * **Propósito**: Historial completo de cambios por empleado
-* **Columnas Rastreadas**:
-  * 👤 Nombre, apellido
-  * 💼 Cargo
-  * 💰 Salario, gastos de representación
-  * 📅 Estado laboral, fechas
+* **Claves Primarias**:
+  * 🔑 `cedula` (cédula)
+  * 👤 `nombre` (nombre)
+  * 👤 `apellido` (apellido)
+  * 💼 `cargo` (cargo)
+  * 📊 `estado` (estado)
+* **Columnas Rastreadas** (historial):
+  * 💰 `salario` (salario)
+  * 💵 `gasto` (gastos de representación)
+  * 📅 `fecha_de_inicio` (fecha de inicio)
+* **Liquid Clustering** por: `cedula`, `institucion`, `estado`
 
 **Visualización de SCD Type 2:**
 
@@ -111,15 +127,26 @@ graph LR
 
 ### 🥈 Silver Layer (Datos Limpios y Curados)
 
-#### `silver_contraloria_employees_current`
+#### `silver_employee_payroll_latest_snapshot`
 * **Tipo**: Materialized View
-* **Fuente**: `bronze_contraloria_employees_scd_type2` (batch read)
-* **Propósito**: Vista consolidada con solo registros vigentes
+* **Fuente**: `bronze_contraloria_employees_raw` (batch read)
+* **Propósito**: Snapshot actual de empleados con traducciones al inglés
 * **Transformaciones**:
-  * ✅ Deduplicación por: `cedula`, `institucion`, `nombre`, `apellido`
-  * ✅ Filtro de registros actuales (`__END_AT IS NULL`)
+  * ✅ Joins con tablas de referencia (instituciones, estados, cargos)
+  * ✅ **Broadcast joins** para tablas de dimensión (optimización de rendimiento)
   * ✅ Traducción de columnas español → inglés
-  * ✅ Selección de campos más recientes por ventana de tiempo
+  * ✅ Campo calculado: `years_of_service` (años de servicio)
+  * ✅ **Liquid Clustering** por: `institution_sp`, `status_sp`
+
+#### `silver_inactive_employees`
+* **Tipo**: Materialized View
+* **Fuente**: `bronze_contraloria_employees_scd_type2` + `silver_employee_payroll_latest_snapshot`
+* **Propósito**: Detectar empleados marcados como activos en SCD pero ausentes en último snapshot
+* **Casos de Uso**:
+  * 🚨 Identificar terminaciones de empleados
+  * 🔍 Validación de calidad de datos
+  * 📊 Rastrear registros faltantes de la API
+* **Método**: LEFT ANTI JOIN para rendimiento óptimo
 
 ---
 
@@ -128,26 +155,38 @@ graph LR
 ```
 contraloria_panama/
 │
-├── 📄 README.md                          # Documentación principal (este archivo)
-├── 📄 README_ES.md                       # Versión en español
-├── 📄 README_EN.md                       # English version
+├── 📄 README_ES.md                       # Documentación en español (este archivo)
+├── 📄 README_EN.md                       # Documentación en inglés
 │
 ├── 📄 requirements.txt                   # Dependencias Python
 ├── 🚫 .gitignore                         # Exclusiones de Git
 │
 ├── 🐍 setup_and_download_files.py        # Script de extracción API
 │   ├── Crea catálogos y esquemas
-│   ├── Crea tablas de referencia
+│   ├── Crea tabla api_check_log
 │   ├── Descarga datos desde API
+│   ├── Guarda en staging del workspace
 │   └── Registra auditoría
 │
-├── 📂 pipelines/
-│   └── 🐍 dlt_pipeline_contraloria.py    # Definición del pipeline DLT
-│       ├── Bronze: Auto Loader ingestion
-│       ├── Bronze: Auto CDC (SCD Type 2)
-│       └── Silver: Materialized View
+├── 📂 transformations/
+│   ├── 🐍 dlt_pipeline_contraloria.py    # Definición principal del pipeline DLT
+│   │   ├── Bronze: Auto Loader ingestion
+│   │   ├── Bronze: Auto CDC (SCD Type 2)
+│   │   ├── Silver: Snapshot actual con traducciones
+│   │   └── Silver: Detección de empleados inactivos
+│   ├── 🐍 dlt_reference_audit.py         # Pipeline de tablas de referencia y auditoría
+│   │   ├── Crea api_check_log_latest (SCD Type 1)
+│   │   ├── Genera reference_institution_names
+│   │   ├── Genera reference_status_names
+│   │   └── Genera reference_position_names
+│   └── 🐍 config.py                      # Configuración del pipeline (rutas, esquemas)
 │
-└── 📂 staging/                           # Archivos temporales (no versionados)
+├── 📂 utils/
+│   ├── 🐍 contraloria.py                 # Utilidades del cliente API
+│   ├── 🐍 config.py                      # Configuración global
+│   └── 🐍 __init__.py                    # Inicialización del módulo
+│
+└── 📂 staging/                           # Archivos temporales (workspace, no versionados)
     └── 📊 InformeConsultaPlanilla_*.parquet
 ```
 
@@ -155,16 +194,28 @@ contraloria_panama/
 
 ## ⚙️ Configuración del Pipeline
 
+### Pipeline Principal: `dlt_contraloria`
+
 | Parámetro | Valor | Descripción |
 |-----------|-------|-------------|
 | **Nombre** | `dlt_contraloria` | Identificador del pipeline |
 | **Catalog** | `contraloria` | Catálogo de Unity Catalog |
-| **Schema** | `employee_payroll` | Esquema de destino |
+| **Schema** | `employee_payroll` | Esquema de destino para tablas principales |
 | **Compute** | Serverless | Sin gestión de clusters |
 | **Photon** | ✅ Habilitado | Motor de ejecución optimizado |
 | **Modo** | Triggered | Ejecución bajo demanda |
 | **Pipeline Type** | Workspace | Archivos en workspace |
-| **Archivo Principal** | `/pipelines/dlt_pipeline_contraloria.py` | Definición del DAG |
+| **Archivo Principal** | `/transformations/dlt_pipeline_contraloria.py` | Definición del DAG |
+| **Optimización** | Liquid Clustering | Queries auto-optimizadas |
+
+### Pipeline de Referencia: `dlt_reference_audit`
+
+| Parámetro | Valor | Descripción |
+|-----------|-------|-------------|
+| **Nombre** | `dlt_reference_audit` | Identificador del pipeline |
+| **Catalog** | `contraloria` | Catálogo de Unity Catalog |
+| **Schema** | `reference_and_audit` | Esquema de destino para tablas de referencia |
+| **Fuente** | `api_check_log` + Tablas Bronze | Genera tablas de referencia |
 
 ---
 
@@ -175,9 +226,10 @@ contraloria_panama/
 * ✅ Databricks Workspace con Unity Catalog habilitado
 * ✅ Permisos para crear catálogos, esquemas y tablas
 * ✅ Acceso de lectura/escritura en workspace
+* ✅ Unity Catalog Volume creado: `contraloria.reference_and_audit.contraloria_staging`
 * ✅ Credenciales de API (si aplica)
 
-### Paso 1️⃣: Configurar Base de Datos
+### Paso 1️⃣: Configurar Base de Datos y Extraer Datos
 
 Ejecuta el script de configuración:
 
@@ -189,106 +241,178 @@ Ejecuta el script de configuración:
 
 1. 🗄️ Crea el catálogo `contraloria`
 2. 📂 Crea esquemas `employee_payroll` y `reference_and_audit`
-3. 📋 Crea tablas de referencia:
-   * `reference_status` - Estados laborales
-   * `reference_institutions` - Instituciones públicas
-4. 📝 Crea tabla de auditoría: `api_check_log`
-5. 🌐 Extrae datos desde la API de la Contraloría
-6. 💾 Guarda archivos Parquet en `staging/`
+3. 📝 Crea tabla de auditoría: `api_check_log`
+4. 🌐 Extrae datos desde la API de la Contraloría
+5. 💾 Guarda archivos Parquet en carpeta `staging/` del workspace
+6. 📊 Registra metadata de extracción
 
-### Paso 2️⃣: Ejecutar el Pipeline
+**Nota**: El script guarda archivos en staging del workspace. Necesitas copiarlos manualmente al Unity Catalog Volume:
+
+```python
+# Copiar desde workspace al volume
+source_path = '/Workspace/Users/jaquesada92@outlook.com/contraloria_panama/staging/'
+target_path = '/Volumes/contraloria/reference_and_audit/contraloria_staging/'
+
+files = dbutils.fs.ls(source_path)
+for file in files:
+    dbutils.fs.cp(file.path, target_path + file.name)
+```
+
+### Paso 2️⃣: Ejecutar Pipeline de Referencia (Solo Primera Vez)
+
+Las tablas de referencia son creadas por el pipeline DLT, no por el script de configuración.
+
+**Ejecuta este pipeline primero:**
+
+```python
+# Navega a Data Engineering → Pipelines → dlt_reference_audit
+# Haz clic en ▶️ Start with Full Refresh
+```
+
+**Este pipeline crea:**
+* 📋 `reference_status_names` - Estados laborales (traducciones español/inglés vía IA)
+* 📋 `reference_institution_names` - Instituciones públicas (traducciones español/inglés vía IA)
+* 📋 `reference_position_names` - Cargos (traducciones español/inglés vía IA)
+* 📊 `api_check_log_latest` - Registros más recientes de verificación de API (SCD Type 1)
+
+### Paso 3️⃣: Ejecutar Pipeline Principal
 
 **Opción A - Interfaz Web:**
 
 1. Navega a **Data Engineering** → **Pipelines**
 2. Selecciona el pipeline `dlt_contraloria`
 3. Haz clic en **▶️ Start** o **🔄 Start with Full Refresh**
-4. Monitorea el progreso en la vista de grafos
+4. Monitorea el progreso en la vista de gráfico
 
 **Opción B - Código Python:**
 
 ```python
-# Obtener updates desde el script de extracción
+# Obtener actualizaciones del script de extracción
 updates = dbutils.jobs.taskValues.get(taskKey="extraction", key="updates")
-print(f"Se procesaron {updates} actualizaciones")
+print(f"Procesadas {updates} actualizaciones")
 ```
 
 ---
 
 ## 📊 Esquema de Datos
 
-### Tabla Principal: `silver_contraloria_employees_current`
+### Tabla Principal: `silver_employee_payroll_latest_snapshot`
 
-**Ruta completa**: `contraloria.employee_payroll.silver_contraloria_employees_current`
+**Ruta completa**: `contraloria.employee_payroll.silver_employee_payroll_latest_snapshot`
 
-| Columna | Tipo | Nulable | Descripción | Ejemplo |
+| Columna | Tipo | Nullable | Descripción | Ejemplo |
 |---------|------|---------|-------------|---------|
-| `id_number` | STRING | ❌ | Cédula del empleado | `8-123-4567` |
-| `institution` | STRING | ❌ | Institución donde labora | `TRIBUNAL ELECTORAL` |
+| `composite_key` | STRING | ❌ | Identificador compuesto único | `JUAN-RODRIGUEZ-TRIBUNAL-ANALYST-8123...` |
 | `first_name` | STRING | ✅ | Nombre(s) del empleado | `JUAN CARLOS` |
 | `last_name` | STRING | ✅ | Apellido(s) del empleado | `RODRIGUEZ PEREZ` |
-| `position` | STRING | ✅ | Cargo o posición | `ANALISTA` |
+| `id_number` | STRING | ❌ | Número de cédula | `8-123-4567` |
 | `salary` | DOUBLE | ✅ | Salario base mensual (USD) | `1500.00` |
 | `allowance` | DOUBLE | ✅ | Gastos de representación (USD) | `300.00` |
-| `status` | STRING | ✅ | Estado laboral | `PERMANENTE` |
+| `status_sp` | STRING | ✅ | Estado laboral (español) | `PERMANENTE` |
+| `status_en` | STRING | ✅ | Estado laboral (inglés) | `PERMANENT` |
+| `institution_sp` | STRING | ✅ | Institución (español) | `TRIBUNAL ELECTORAL` |
+| `institution_en` | STRING | ✅ | Institución (inglés) | `ELECTORAL COURT` |
+| `position_sp` | STRING | ✅ | Cargo (español) | `ANALISTA` |
+| `position_en` | STRING | ✅ | Cargo (inglés) | `ANALYST` |
 | `start_date` | DATE | ✅ | Fecha de inicio en el cargo | `2020-01-15` |
-| `update_date` | TIMESTAMP | ✅ | Última actualización en fuente | `2026-03-29 10:30:00` |
-| `query_date` | TIMESTAMP | ✅ | Fecha de consulta/extracción | `2026-03-29 12:00:00` |
-| `file` | STRING | ✅ | Nombre del archivo fuente | `InformeConsultaPlanilla_*.parquet` |
+| `query_date` | TIMESTAMP | ✅ | Fecha de actualización de la fuente | `2025-01-15 00:00:00` |
+| `snapshot_date` | TIMESTAMP | ✅ | Fecha de consulta/extracción | `2025-01-15 12:00:00` |
+| `years_of_service` | DOUBLE | ✅ | Años en el cargo | `4.5` |
+| `file` | STRING | ✅ | Nombre del archivo fuente | `InformeConsultaPlanilla_2025-01.parquet` |
 
-### Llaves y Restricciones
+### Tabla de Empleados Inactivos: `silver_inactive_employees`
 
-**Primary Keys:**
-* **Bronze SCD-2**: `(cedula, institucion)`
-* **Silver Dedup**: `(cedula, institucion, nombre, apellido)`
+**Ruta completa**: `contraloria.employee_payroll.silver_inactive_employees`
 
-**Sequence Column**: `fecha_consulta` (para ordenamiento temporal en CDC)
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `cedula` | STRING | Número de cédula |
+| `nombre` | STRING | Nombre |
+| `apellido` | STRING | Apellido |
+| `cargo` | STRING | Cargo |
+| `estado` | STRING | Estado |
+| `institucion` | STRING | Institución |
+| `salario` | DOUBLE | Último salario conocido |
+| `gasto` | DOUBLE | Último gasto conocido |
+| `fecha_de_inicio` | DATE | Fecha de inicio |
+| `__START_AT` | TIMESTAMP | Cuando el registro se volvió activo en SCD |
+
+### Claves y Restricciones
+
+**Claves Primarias (SCD Type 2):**
+* `(cedula, nombre, apellido, cargo, estado)`
+
+**Columna de Secuencia**: `fecha_consulta` (para ordenamiento temporal en CDC)
+
+**Claves de Clustering:**
+* **Bronze Raw**: `(institucion, fecha_consulta)`
+* **Bronze SCD-2**: `(cedula, institucion, estado)`
+* **Silver Snapshot**: `(institution_sp, status_sp)`
 
 ---
 
 ## 🔄 Proceso de Actualización
 
-### Flujo de Trabajo Completo
+### Flujo Completo
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │ PASO 1: EXTRACCIÓN                                                  │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 1. Script consulta API de Contraloría                               │
-│ 2. Verifica fecha de última actualización en source                 │
-│ 3. Descarga solo datos nuevos/modificados                           │
-│ 4. Guarda en formato Parquet optimizado                             │
+│ 1. Script consulta la API de la Contraloría                         │
+│ 2. Verifica la última fecha de actualización en la fuente           │
+│ 3. Descarga solo registros nuevos/modificados                       │
+│ 4. Guarda en formato Parquet optimizado en workspace staging/       │
 │ 5. Registra metadata en tabla de auditoría                          │
 └─────────────────────────────────────────────────────────────────────┘
                              ⬇️
 ┌─────────────────────────────────────────────────────────────────────┐
-│ PASO 2: INGESTA (BRONZE)                                            │
+│ PASO 1.5: COPIA MANUAL (TEMPORAL)                                   │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 1. Auto Loader detecta nuevos archivos en staging/                  │
-│ 2. Lee solo archivos no procesados previamente                      │
+│ Copiar archivos desde staging/ del workspace a Unity Catalog Volume │
+│ Ruta: /Volumes/contraloria/reference_and_audit/contraloria_staging  │
+└─────────────────────────────────────────────────────────────────────┘
+                             ⬇️
+┌─────────────────────────────────────────────────────────────────────┐
+│ PASO 2: TABLAS DE REFERENCIA (Pipeline DLT de Referencia)           │
+├─────────────────────────────────────────────────────────────────────┤
+│ 1. Lee tabla api_check_log                                          │
+│ 2. Crea api_check_log_latest (SCD Type 1)                           │
+│ 3. Genera reference_institution_names con traducciones              │
+│ 4. Genera reference_status_names con traducciones                   │
+│ 5. Extrae cargos de bronze y genera traducciones                    │
+└─────────────────────────────────────────────────────────────────────┘
+                             ⬇️
+┌─────────────────────────────────────────────────────────────────────┐
+│ PASO 3: INGESTA (BRONZE RAW)                                        │
+├─────────────────────────────────────────────────────────────────────┤
+│ 1. Auto Loader detecta archivos nuevos en Volume staging/           │
+│ 2. Lee solo archivos no procesados                                  │
 │ 3. Aplica esquema explícito predefinido                             │
-│ 4. Escribe a bronze_contraloria_raw (streaming table)               │
+│ 4. Escribe a bronze_contraloria_employees_raw                       │
+│ 5. Añade columnas composite_key y antiguedad                        │
 └─────────────────────────────────────────────────────────────────────┘
                              ⬇️
 ┌─────────────────────────────────────────────────────────────────────┐
-│ PASO 3: HISTORIZACIÓN (BRONZE SCD-2)                                │
+│ PASO 4: HISTORIZACIÓN (BRONZE SCD-2)                                │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 1. Auto CDC lee stream desde bronze_contraloria_raw                 │
-│ 2. Detecta INSERTs, UPDATEs basados en keys                         │
+│ 1. Auto CDC lee stream de bronze_contraloria_employees_raw          │
+│ 2. Detecta INSERTs, UPDATEs basado en claves compuestas             │
 │ 3. Cierra registros antiguos (__END_AT = timestamp)                 │
-│ 4. Inserta nuevas versiones (__END_AT = NULL)                       │
-│ 5. Agrega columnas __START_AT, __END_AT, __ACTION                   │
+│ 4. Inserta versiones nuevas (__END_AT = NULL)                       │
+│ 5. Añade columnas __START_AT, __END_AT, __ACTION                    │
+│ 6. Rastrea historial de: salario, gasto, fecha_de_inicio            │
 └─────────────────────────────────────────────────────────────────────┘
                              ⬇️
 ┌─────────────────────────────────────────────────────────────────────┐
-│ PASO 4: CURACIÓN (SILVER)                                           │
+│ PASO 5: CURACIÓN (SILVER)                                           │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 1. Lee batch desde bronze SCD-2 table                               │
-│ 2. Filtra solo registros actuales (__END_AT IS NULL)                │
-│ 3. Aplica ventana de deduplicación por keys                         │
-│ 4. Selecciona registro más reciente por grupo                       │
-│ 5. Traduce columnas español → inglés                                │
-│ 6. Materializa vista optimizada                                     │
+│ 1. Lee en batch de bronze_contraloria_employees_raw                 │
+│ 2. Joins broadcast con tablas de referencia                         │
+│ 3. Traduce columnas español → inglés                                │
+│ 4. Calcula years_of_service                                         │
+│ 5. Materializa vista optimizada con Liquid Clustering               │
+│ 6. Detecta empleados inactivos vía anti-join                        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -297,7 +421,9 @@ print(f"Se procesaron {updates} actualizaciones")
 | Proceso | Frecuencia Sugerida | Razón |
 |---------|---------------------|-------|
 | **Extracción API** | Mensual | Fuente se actualiza mensualmente |
-| **Pipeline DLT** | Post-extracción | Procesar solo cuando hay datos nuevos |
+| **Copia a Volume** | Post-extracción | Paso manual (temporal) |
+| **Pipeline de Referencia** | Post-extracción | Generar traducciones para datos nuevos |
+| **Pipeline DLT Principal** | Post-pipeline de referencia | Procesar solo cuando llegan datos nuevos |
 | **Monitoreo** | Diario | Validar calidad y completitud |
 
 ---
@@ -308,25 +434,25 @@ print(f"Se procesaron {updates} actualizaciones")
 
 ```sql
 SELECT 
-  institution,
-  COUNT(*) as total_employees,
-  SUM(salary) as total_salary_budget,
-  SUM(allowance) as total_allowance_budget,
-  AVG(salary) as avg_salary,
-  MAX(salary) as max_salary
-FROM contraloria.employee_payroll.silver_contraloria_employees_current
-GROUP BY institution
-ORDER BY total_employees DESC;
+  institution_en,
+  COUNT(*) as total_empleados,
+  SUM(salary) as presupuesto_salarios,
+  SUM(allowance) as presupuesto_gastos,
+  AVG(salary) as salario_promedio,
+  MAX(salary) as salario_maximo
+FROM contraloria.employee_payroll.silver_employee_payroll_latest_snapshot
+GROUP BY institution_en
+ORDER BY total_empleados DESC;
 ```
 
 **Resultado esperado:**
 ```
 ┌───────────────────────────┬──────────────────┬──────────────────────┐
-│ institution               │ total_employees  │ total_salary_budget  │
+│ institution_en            │ total_empleados  │ presupuesto_salarios │
 ├───────────────────────────┼──────────────────┼──────────────────────┤
-│ TRIBUNAL ELECTORAL        │ 2,450            │ 4,125,000.00         │
-│ TRIBUNAL DE CUENTAS       │ 1,890            │ 3,215,500.00         │
-│ TRIBUNAL ADMINISTRATIVO   │ 1,234            │ 2,100,300.00         │
+│ ELECTORAL COURT           │ 2,450            │ 4,125,000.00         │
+│ COURT OF ACCOUNTS         │ 1,890            │ 3,215,500.00         │
+│ ADMINISTRATIVE COURT      │ 1,234            │ 2,100,300.00         │
 └───────────────────────────┴──────────────────┴──────────────────────┘
 ```
 
@@ -335,14 +461,14 @@ ORDER BY total_employees DESC;
 ```sql
 SELECT 
   id_number,
-  CONCAT(first_name, ' ', last_name) as full_name,
-  institution,
-  position,
+  CONCAT(first_name, ' ', last_name) as nombre_completo,
+  institution_en,
+  position_en,
   salary,
   allowance,
-  (salary + allowance) as total_compensation
-FROM contraloria.employee_payroll.silver_contraloria_employees_current
-ORDER BY total_compensation DESC
+  (salary + allowance) as compensacion_total
+FROM contraloria.employee_payroll.silver_employee_payroll_latest_snapshot
+ORDER BY compensacion_total DESC
 LIMIT 100;
 ```
 
@@ -356,9 +482,9 @@ SELECT
   cargo,
   salario,
   estado,
-  __START_AT as valid_from,
-  COALESCE(__END_AT, CURRENT_TIMESTAMP()) as valid_to,
-  __ACTION as change_type
+  __START_AT as vigente_desde,
+  COALESCE(__END_AT, CURRENT_TIMESTAMP()) as vigente_hasta,
+  __ACTION as tipo_cambio
 FROM contraloria.employee_payroll.bronze_contraloria_employees_scd_type2
 WHERE cedula = '8-123-4567'
 ORDER BY __START_AT DESC;
@@ -368,12 +494,41 @@ ORDER BY __START_AT DESC;
 
 ```sql
 SELECT 
-  status,
-  COUNT(*) as employee_count,
-  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) as percentage
-FROM contraloria.employee_payroll.silver_contraloria_employees_current
-GROUP BY status
-ORDER BY employee_count DESC;
+  status_en,
+  COUNT(*) as cantidad_empleados,
+  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) as porcentaje
+FROM contraloria.employee_payroll.silver_employee_payroll_latest_snapshot
+GROUP BY status_en
+ORDER BY cantidad_empleados DESC;
+```
+
+### 5️⃣ Promedio de Años de Servicio por Institución
+
+```sql
+SELECT 
+  institution_en,
+  AVG(years_of_service) as promedio_anos_servicio,
+  MIN(years_of_service) as minimo_anos,
+  MAX(years_of_service) as maximo_anos
+FROM contraloria.employee_payroll.silver_employee_payroll_latest_snapshot
+GROUP BY institution_en
+ORDER BY promedio_anos_servicio DESC;
+```
+
+### 6️⃣ Empleados Inactivos (Posibles Terminaciones)
+
+```sql
+SELECT 
+  cedula,
+  CONCAT(nombre, ' ', apellido) as nombre_completo,
+  institucion,
+  cargo,
+  estado,
+  salario,
+  __START_AT as se_activo_en
+FROM contraloria.employee_payroll.silver_inactive_employees
+ORDER BY __START_AT DESC
+LIMIT 100;
 ```
 
 ---
@@ -384,13 +539,13 @@ ORDER BY employee_count DESC;
 
 #### 1. Estado del Pipeline
 ```python
-# Revisar último update
+# Verificar última actualización
 from databricks import pipelines
 pipeline_id = "ffbae848-bc88-4c0e-89a3-32768ee1fc79"
 # Ver detalles en la UI del pipeline
 ```
 
-#### 2. Logs de Auditoría API
+#### 2. Logs de Auditoría de API
 ```sql
 SELECT 
   institution_name_spanish,
@@ -398,54 +553,95 @@ SELECT
   run_status,
   source_update,
   checked_at,
-  time as execution_time_seconds
+  time as tiempo_ejecucion_segundos
 FROM contraloria.reference_and_audit.api_check_log
 WHERE checked_at >= CURRENT_DATE() - INTERVAL 7 DAYS
 ORDER BY checked_at DESC;
 ```
 
+#### 3. Calidad de Datos - Verificar Registros Faltantes
+```sql
+-- Contar empleados inactivos (presentes en SCD pero no en último snapshot)
+SELECT COUNT(*) as cantidad_inactivos
+FROM contraloria.employee_payroll.silver_inactive_employees;
+
+-- Comparar conteos de registros
+SELECT 
+  'Registros Activos SCD' as fuente,
+  COUNT(*) as cantidad
+FROM contraloria.employee_payroll.bronze_contraloria_employees_scd_type2
+WHERE __END_AT IS NULL
+
+UNION ALL
+
+SELECT 
+  'Último Snapshot' as fuente,
+  COUNT(*) as cantidad
+FROM contraloria.employee_payroll.silver_employee_payroll_latest_snapshot;
+```
+
 ### Limpieza de Staging
 
 ```python
-# Limpiar archivos procesados (opcional)
+# Limpiar archivos de staging del workspace (después de copiar a volume)
 staging_path = '/Workspace/Users/jaquesada92@outlook.com/contraloria_panama/staging/'
 
 # Listar archivos
 files = dbutils.fs.ls(staging_path)
-print(f"Total archivos: {len(files)}")
+print(f"Total de archivos: {len(files)}")
 
-# Eliminar todos los archivos staging (después de confirmar que el pipeline corrió OK)
+# Eliminar todos los archivos de staging (después de confirmar que el pipeline corrió exitosamente)
 dbutils.fs.rm(staging_path, recurse=True)
 dbutils.fs.mkdirs(staging_path)
 ```
 
-### Actualización de Esquema
+### Actualizaciones de Esquema
 
-Si la API agrega nuevas columnas:
+Si la API añade nuevas columnas:
 
-1. Modificar `schema` en `dlt_pipeline_contraloria.py` (líneas 29-42)
-2. Actualizar transformaciones en la capa Silver (líneas 117-130)
-3. Ejecutar **Full Refresh** del pipeline
+1. Modificar `STAGING_SCHEMA` en `transformations/config.py`
+2. Actualizar transformaciones en capa Silver en `dlt_pipeline_contraloria.py`
+3. Ejecutar **Full Refresh** de ambos pipelines
 
 ---
 
 ## 📝 Dependencias
 
-**Python Libraries** (`requirements.txt`):
-* `openpyxl` - Lectura de archivos Excel/XLSX desde la API
+**Librerías Python** (`requirements.txt`):
+* `openpyxl` - Leer archivos Excel/XLSX de la API
 
 **Databricks Runtime**:
 * DBR 14.0+ recomendado
 * Unity Catalog habilitado
-* Serverless pipelines
+* Pipelines serverless con Photon
+
+---
+
+## 📊 Visualización de Datos y Dashboards
+
+### Dashboard de Power BI
+
+Se ha creado un dashboard interactivo en Power BI para visualizar y analizar los datos de nómina de la tabla `silver_employee_payroll_latest_snapshot`.
+
+**🔗 Acceso al Dashboard**: [Análisis de Nómina Pública de Panamá - Power BI](https://app.powerbi.com/view?r=eyJrIjoiOGUxOTk0ZWEtODg2NC00NDEzLTllMWYtOTdkMjkxMWE3ZWU3IiwidCI6IjBhNzk5NDU0LTM1NTAtNGZiNi1iNGMzLWY5ZWIzMmVhOWU2NCJ9)
+
+**Características del Dashboard:**
+* 📊 Distribución de empleados por institución
+* 💰 Análisis de salarios y gastos de representación
+* 📈 Tendencias históricas y comparaciones
+* 🔍 Filtros interactivos y drill-downs
+* 📋 Indicadores clave de rendimiento (KPIs)
 
 ---
 
 ## 🔗 Enlaces y Recursos
 
-* 🏛️ **Pipeline**: [dlt_contraloria](#pipeline-ffbae848-bc88-4c0e-89a3-32768ee1fc79)
-* 📊 **Tabla Principal**: [silver_contraloria_employees_current](#table)
+* 🏛️ **Pipeline Principal**: [dlt_contraloria](#pipeline-ffbae848-bc88-4c0e-89a3-32768ee1fc79)
+* 🏛️ **Pipeline de Referencia**: [dlt_reference_audit](#pipeline)
+* 📊 **Tabla Principal**: [silver_employee_payroll_latest_snapshot](#table)
+* 📊 **Dashboard Power BI**: [Análisis de Nómina Pública de Panamá](https://app.powerbi.com/view?r=eyJrIjoiOGUxOTk0ZWEtODg2NC00NDEzLTllMWYtOTdkMjkxMWE3ZWU3IiwidCI6IjBhNzk5NDU0LTM1NTAtNGZiNi1iNGMzLWY5ZWIzMmVhOWU2NCJ9)
 * 📚 **Documentación DLT**: [docs.databricks.com/delta-live-tables](https://docs.databricks.com/delta-live-tables/)
+* 🔗 **Liquid Clustering**: [docs.databricks.com/delta/liquid-clustering](https://docs.databricks.com/delta/clustering.html)
 * 🌐 **API Contraloría**: [Sitio oficial](https://www.contraloria.gob.pa/)
 
 ---
@@ -460,9 +656,9 @@ Si la API agrega nuevas columnas:
 
 ## 📄 Licencia
 
-Este proyecto es de uso interno. Todos los derechos reservados.
+Este proyecto es para propósitos educativos y de demostración.
 
 ---
 
-*Última actualización: Marzo 2026*  
-*Versión: 1.0*
+*Última actualización: Enero 2025*  
+*Versión: 2.1*
